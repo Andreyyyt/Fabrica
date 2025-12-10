@@ -1,0 +1,162 @@
+lastChange = millis();
+  }
+  
+  switch(searchState) {
+    case 0: // Вращение влево
+      mecanumDrive(0, 0, 80);
+      break;
+    case 1: // Вращение вправо
+      mecanumDrive(0, 0, -80);
+      break;
+    case 2: // Движение вперед
+      mecanumDrive(80, 0, 0);
+      break;
+    case 3: // Движение назад
+      mecanumDrive(-80, 0, 0);
+      break;
+  }
+  
+  Serial.println("Searching for target...");
+}
+
+// ========== ИЗБЕГАНИЕ ПРЕПЯТСТВИЙ ==========
+void avoidObstacle() {
+  Serial.println("Avoiding obstacle...");
+  
+  // Простой алгоритм обхода
+  // 1. Отъезжаем назад
+  mecanumDrive(-100, 0, 0);
+  delay(500);
+  
+  // 2. Случайный выбор направления
+  bool goRight = random(0, 2); // 0 или 1
+  
+  if (goRight) {
+    // 3a. Движение вправо (боком)
+    mecanumDrive(0, -100, 0);
+    Serial.println("Avoiding RIGHT");
+  } else {
+    // 3b. Движение влево (боком)
+    mecanumDrive(0, 100, 0);
+    Serial.println("Avoiding LEFT");
+  }
+  
+  delay(800);
+  
+  // 4. Снова вперед
+  mecanumDrive(100, 0, 0);
+  delay(600);
+  
+  stopAllMotors();
+  delay(1000);
+}
+
+// ========== ЧТЕНИЕ ДАННЫХ С КАМЕРЫ ==========
+void readCameraData() {
+  if (espSerial.available()) {
+    String data = espSerial.readStringUntil('\n');
+    data.trim();
+    
+    // Формат: "X,Y,SIZE" или "255,255,0" если не найдено
+    int comma1 = data.indexOf(',');
+    int comma2 = data.indexOf(',', comma1 + 1);
+    
+    if (comma1 != -1 && comma2 != -1) {
+      targetX = data.substring(0, comma1).toInt();
+      targetY = data.substring(comma1 + 1, comma2).toInt();
+      targetSize = data.substring(comma2 + 1).toInt();
+      
+      targetFound = (targetX != 255 && targetY != 255);
+      
+      if (!targetFound) {
+        targetX = FRAME_CENTER_X;
+        targetY = FRAME_CENTER_Y;
+        targetSize = 0;
+      }
+    }
+  }
+}
+
+// ========== УЗ-ДАТЧИК ==========
+int readUltrasonic() {
+  // Генерация импульса
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  // Чтение Echo через MUX
+  selectMuxChannel(US_ECHO_CH);
+  long duration = pulseIn(MUX_SIG, HIGH, 30000);
+  
+  if (duration == 0) return 999; // Таймаут
+  return duration * 0.034 / 2; // см
+}
+
+// ========== ОТЛАДКА ==========
+void printDebugInfo() {
+  Serial.print("Target: ");
+  if (targetFound) {
+    Serial.print("[FOUND] X=");
+    Serial.print(targetX);
+    Serial.print(" Y=");
+    Serial.print(targetY);
+    Serial.print(" Size=");
+    Serial.print(targetSize);
+  } else {
+    Serial.print("[LOST]");
+  }
+  
+  Serial.print(" | Obstacle: ");
+  Serial.print(obstacleDistance);
+  Serial.print("cm");
+  
+  Serial.print(" | Encoders: ");
+  for (int i = 0; i < 4; i++) {
+    Serial.print(encoderCounts[i]);
+    Serial.print(" ");
+  }
+  
+  Serial.println();
+}
+
+// ========== ТЕСТОВЫЕ ФУНКЦИИ ==========
+void testAllComponents() {
+  Serial.println("=== TEST MODE ===");
+  
+  // Тест моторов
+  Serial.println("Testing motors...");
+  for (int i = 0; i < 4; i++) {
+    Serial.print("Motor M"); Serial.println(i+1);
+    setMotor(i, 100);
+    delay(1000);
+    setMotor(i, 0);
+    delay(500);
+  }
+  
+  // Тест энкодеров
+  Serial.println("Testing encoders...");
+  for (int i = 0; i < 4; i++) {
+    int val = readMuxChannel(i);
+    Serial.print("Encoder M"); Serial.print(i+1);
+    Serial.print(": "); Serial.println(val);
+  }
+  
+  // Тест УЗ
+  Serial.print("Ultrasonic: ");
+  Serial.print(readUltrasonic());
+  Serial.println(" cm");
+  
+  // Тест связи с ESP32
+  Serial.println("Testing ESP32 communication...");
+  espSerial.println("TEST");
+  delay(100);
+  if (espSerial.available()) {
+    String response = espSerial.readString();
+    Serial.print("ESP32: "); Serial.println(response);
+  }
+  
+  Serial.println("=== TEST COMPLETE ===");
+  stopAllMotors();
+}
