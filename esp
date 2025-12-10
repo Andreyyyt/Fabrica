@@ -1,0 +1,144 @@
+analogWrite(M1_PWM, pwm);
+      break;
+    case 1: // M2
+      digitalWrite(M2_DIR, dir);
+      analogWrite(M2_PWM, pwm);
+      break;
+    case 2: // M3
+      digitalWrite(M3_DIR, dir);
+      analogWrite(M3_PWM, pwm);
+      break;
+    case 3: // M4
+      digitalWrite(M4_DIR, dir);
+      analogWrite(M4_PWM, pwm);
+      break;
+  }
+}
+
+void stopAllMotors() {
+  for (int i = 0; i < 4; i++) {
+    setMotor(i, 0);
+  }
+}
+
+void emergencyStop() {
+  stopAllMotors();
+  Serial.println("EMERGENCY STOP! Obstacle too close!");
+  delay(1000);
+}
+
+// ========== MECANUM ДВИЖЕНИЕ ==========
+void mecanumDrive(float vx, float vy, float omega) {
+  // vx: вперед/назад (+ вперед)
+  // vy: влево/вправо (+ вправо)
+  // omega: вращение (+ по часовой)
+  
+  // Формула для mecanum колес
+  float w1 = vx + vy + omega;  // M1: передний левый
+  float w2 = vx - vy + omega;  // M2: задний левый
+  float w3 = vx - vy - omega;  // M3: передний правый
+  float w4 = vx + vy - omega;  // M4: задний правый
+  
+  // Нормализация скоростей
+  float maxVal = 0;
+  float speeds[] = {w1, w2, w3, w4};
+  for (int i = 0; i < 4; i++) {
+    maxVal = max(maxVal, abs(speeds[i]));
+  }
+  
+  if (maxVal > maxSpeed) {
+    for (int i = 0; i < 4; i++) {
+      speeds[i] = (speeds[i] / maxVal) * maxSpeed;
+    }
+  }
+  
+  // Установка скоростей
+  setMotor(0, speeds[0]);
+  setMotor(1, speeds[1]);
+  setMotor(2, speeds[2]);
+  setMotor(3, speeds[3]);
+}
+
+// ========== СЛЕДОВАНИЕ ЗА МЕТКОЙ ==========
+void followRedTarget() {
+  // Вычисляем ошибки
+  float errorX = targetX - FRAME_CENTER_X;  // -160..+160
+  float errorY = targetY - FRAME_CENTER_Y;  // -120..+120
+  float errorSize = DESIRED_SIZE - targetSize; // Разница в размере
+  
+  // Нормализация ошибок
+  errorX = errorX / FRAME_CENTER_X;  // -1..+1
+  errorY = errorY / FRAME_CENTER_Y;  // -1..+1
+  
+  // Вычисление управляющих сигналов
+  float vx = 0;   // Вперед/назад
+  float vy = 0;   // Влево/вправо
+  float omega = 0; // Вращение
+  
+  // Если метка слишком далеко по Y (высоко/низко) - двигаемся вперед/назад
+  if (abs(errorY) > 0.2) { // 20% от центра
+    vx = -errorY * Kp_distance * maxSpeed; // минус т.к. Y растет вниз
+  }
+  
+  // Если метка смещена по X - двигаемся боком или вращаемся
+  if (abs(errorX) > 0.15) { // 15% от центра
+    // Для небольших смещений - боковое движение
+    if (abs(errorX) < 0.5) {
+      vy = -errorX * Kp_angle * maxSpeed; // минус для компенсации
+    } else {
+      // Для больших смещений - вращение
+      omega = -errorX * Kp_angle * maxSpeed * 0.5;
+    }
+  }
+  
+  // Регулировка скорости по размеру метки
+  float sizeFactor = 1.0;
+  if (targetSize > DESIRED_SIZE * 1.5) {
+    // Метка слишком близко - замедляемся
+    sizeFactor = 0.3;
+  } else if (targetSize < DESIRED_SIZE * 0.5) {
+    // Метка далеко - можно ехать быстрее
+    sizeFactor = 1.5;
+  }
+  
+  vx *= sizeFactor;
+  vy *= sizeFactor;
+  omega *= sizeFactor;
+  
+  // Если метка в центре и правильного размера - стоим
+  if (abs(errorX) < 0.1 && abs(errorY) < 0.1 && 
+      abs(errorSize) < 10) {
+    vx = 0;
+    vy = 0;
+    omega = 0;
+  }
+  
+  // Применяем движение
+  mecanumDrive(vx, vy, omega);
+  
+  // Отладка
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 100) {
+    Serial.print("Following: X=");
+    Serial.print(targetX);
+    Serial.print(" Y=");
+    Serial.print(targetY);
+    Serial.print(" Size=");
+    Serial.print(targetSize);
+    Serial.print(" | Vx=");
+    Serial.print(vx);
+    Serial.print(" Vy=");
+    Serial.print(vy);
+    Serial.print(" Omega=");
+    Serial.println(omega);
+    lastPrint = millis();
+  }
+}
+
+// ========== ПОИСК МЕТКИ ==========
+void searchForTarget() {
+  static int searchState = 0;
+  static unsigned long lastChange = 0;
+  
+  if (millis() - lastChange > 3000) { // Меняем состояние каждые 3 секунды
+    searchState = (searchState + 1) % 4;
